@@ -7,7 +7,7 @@ from solana.rpc.api import Client as SolanaClient
 import base58
 
 # Replace with your Telegram bot token
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "7493600316:AAF1HA2_wfHZP9kERAWvGhrmMEhcRyZ1-nY"
 
 # Solana RPC URL (Change to testnet if needed)
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
